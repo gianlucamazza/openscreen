@@ -68,6 +68,20 @@ if (!build_with_chromium) {
         "streaming_video_encoder.h",
         "streaming_vpx_encoder.cc",
         "streaming_vpx_encoder.h",
+
+        # Live screen-mirror sender (Wayland ext-image-copy-capture -> VP8/H264).
+        "audio_capturer.cc",
+        "audio_capturer.h",
+        "ext-foreign-toplevel-list-v1.c",
+        "ext-image-capture-source-v1.c",
+        "ext-image-copy-capture-v1.c",
+        "hyprland-toplevel-mapping-v1.c",
+        "h264_vaapi_encoder.cc",
+        "h264_vaapi_encoder.h",
+        "screen_capturer.cc",
+        "screen_capturer.h",
+        "screen_mirror_sender.cc",
+        "screen_mirror_sender.h",
       ]
       deps += [ "../standalone_common:ffmpeg_glue" ]
 
@@ -76,6 +90,17 @@ if (!build_with_chromium) {
       lib_dirs += external_lib_dirs + ffmpeg_lib_dirs + libopus_lib_dirs +
                   libvpx_lib_dirs
       libs += ffmpeg_libs + libopus_libs + libvpx_libs
+
+      # Wayland screen capture + RGB->I420 color conversion + PipeWire audio.
+      libs += [
+        "wayland-client",
+        "swscale",
+        "pipewire-0.3",
+      ]
+      include_dirs += [
+        "/usr/include/pipewire-0.3",
+        "/usr/include/spa-0.2",
+      ]
 
       # LibAOM support currently recommends building from source, so is included
       # separately here.

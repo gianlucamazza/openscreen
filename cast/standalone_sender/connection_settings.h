@@ -49,6 +49,10 @@ struct ConnectionSettings {
 
   // Whether input event API should be enabled for this session.
   bool enable_input_events = false;
+
+  // For window mirroring: capture only the audio of this process (and its
+  // descendants) instead of the whole system mix. 0 = system mix (default).
+  int audio_target_pid = 0;
 };
 
 }  // namespace openscreen::cast

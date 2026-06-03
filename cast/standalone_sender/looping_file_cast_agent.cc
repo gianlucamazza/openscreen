@@ -27,6 +27,13 @@ namespace {
 
 using DeviceMediaPolicy = SenderSocketFactory::DeviceMediaPolicy;
 
+// True for live screen/window mirroring targets ("screen[:out]", "window[:sel]")
+// as opposed to a media file path.
+bool IsMirrorPath(const std::string& path) {
+  return path == "screen" || path.rfind("screen:", 0) == 0 ||
+         path == "window" || path.rfind("window:", 0) == 0;
+}
+
 }  // namespace
 
 LoopingFileCastAgent::LoopingFileCastAgent(
@@ -316,6 +323,18 @@ void LoopingFileCastAgent::CreateAndStartSession() {
   // Use default display resolution of 1080P.
   video_config.resolutions.emplace_back(Resolution{1920, 1080});
 
+  // For live screen mirroring, request a low playout delay (the default 400ms
+  // jitter buffer dominates glass-to-glass latency). Hardware H.264 encode is
+  // ~20ms and the LAN is fast, so a small buffer is sufficient. Measured RTT on
+  // this LAN is ~110ms, so 100ms is a touch tight (the sender caps RTT to the
+  // playout delay); 120ms keeps latency low while clearing that cap.
+  const std::string& path = connection_settings_->path_to_file;
+  if (IsMirrorPath(path)) {
+    constexpr std::chrono::milliseconds kMirrorPlayoutDelay{120};
+    audio_config.target_playout_delay = kMirrorPlayoutDelay;
+    video_config.target_playout_delay = kMirrorPlayoutDelay;
+  }
+
   OSP_VLOG << "Starting session negotiation.";
   Error negotiation_error;
   if (connection_settings_->use_remoting) {
@@ -416,9 +435,16 @@ void LoopingFileCastAgent::OnPlaybackRateChange(double rate) {
 
 void LoopingFileCastAgent::StartFileSender() {
   OSP_CHECK(current_negotiation_);
-  file_sender_ = std::make_unique<LoopingFileSender>(
-      *environment_, connection_settings_.value(), current_session_.get(),
-      std::move(*current_negotiation_), [this]() { shutdown_callback_(); });
+  const std::string& path = connection_settings_->path_to_file;
+  if (IsMirrorPath(path)) {
+    screen_sender_ = std::make_unique<ScreenMirrorSender>(
+        *environment_, connection_settings_.value(), current_session_.get(),
+        std::move(*current_negotiation_), [this]() { shutdown_callback_(); });
+  } else {
+    file_sender_ = std::make_unique<LoopingFileSender>(
+        *environment_, connection_settings_.value(), current_session_.get(),
+        std::move(*current_negotiation_), [this]() { shutdown_callback_(); });
+  }
   current_negotiation_.reset();
   is_ready_for_remoting_ = false;
 }
@@ -427,6 +453,7 @@ void LoopingFileCastAgent::Shutdown() {
   TRACE_DEFAULT_SCOPED(TraceCategory::kStandaloneSender);
 
   file_sender_.reset();
+  screen_sender_.reset();
   if (current_session_) {
     OSP_LOG_INFO << "Stopping mirroring session...";
     current_session_.reset();

@@ -121,8 +121,11 @@ IPEndpoint ParseAsEndpoint(const char* string_form) {
 
 std::optional<VideoCodec> ParseCodec(std::string_view arg) {
   // We can only support codecs that have a corresponding encoder library.
-  static constexpr std::array<VideoCodec, 3> kSupportedCodecs = {
-      {VideoCodec::kVp8, VideoCodec::kVp9, VideoCodec::kAv1}};
+  // kH264 has no software encoder here; it is allowed so the "screen" mirror
+  // path can offer H.264 (encoded via VAAPI) and to probe receiver support.
+  static constexpr std::array<VideoCodec, 4> kSupportedCodecs = {
+      {VideoCodec::kVp8, VideoCodec::kVp9, VideoCodec::kAv1,
+       VideoCodec::kH264}};
 
   const auto parsed = StringToVideoCodec(arg);
   if (!parsed || std::ranges::find(kSupportedCodecs, parsed.value()) ==
@@ -147,6 +150,7 @@ struct Arguments {
   bool use_remoting = false;
   bool enable_input_events = false;
   bool is_verbose = false;
+  int audio_target_pid = 0;
   VideoCodec codec = VideoCodec::kVp8;
   std::unique_ptr<TraceLoggingPlatform> trace_logger;
   bool enable_dscp = true;
@@ -163,6 +167,7 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
       {"developer-certificate", required_argument, nullptr, 'd'},
       {"enable-input-events", no_argument, nullptr, 'i'},
       {"help", no_argument, nullptr, 'h'},
+      {"audio-pid", required_argument, nullptr, 'A'},
       {"max-bitrate", required_argument, nullptr, 'm'},
       {"no-looping", no_argument, nullptr, 'n'},
       {"disable-dscp", no_argument, nullptr, 'q'},
@@ -176,11 +181,18 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
 
   Arguments args;
   int ch = -1;
-  while ((ch = getopt_long(argc, argv, "ac:d:him:nqrtvP", kArgumentOptions,
+  while ((ch = getopt_long(argc, argv, "aA:c:d:him:nqrtvP", kArgumentOptions,
                            nullptr)) != -1) {
     switch (ch) {
       case 'a':
         args.use_android_rtp_hack = true;
+        break;
+      case 'A':
+        if (!string_parse::ParseAsciiNumber(get_opt::optarg,
+                                            args.audio_target_pid)) {
+          OSP_LOG_ERROR << "Invalid --audio-pid: " << get_opt::optarg;
+          return std::nullopt;
+        }
         break;
       case 'm':
         if (!string_parse::ParseAsciiNumber(get_opt::optarg,
@@ -304,7 +316,8 @@ int StandaloneSenderMain(int argc, char* argv[]) {
                          .should_loop_video = args->should_loop_video,
                          .codec = args->codec,
                          .enable_dscp = args->enable_dscp,
-                         .enable_input_events = args->enable_input_events});
+                         .enable_input_events = args->enable_input_events,
+                         .audio_target_pid = args->audio_target_pid});
   });
 
   // Run the event loop until SIGINT (e.g., CTRL-C at the console) or

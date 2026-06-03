@@ -21,6 +21,7 @@
 #include "cast/standalone_sender/connection_settings.h"
 #include "cast/standalone_sender/looping_file_sender.h"
 #include "cast/standalone_sender/remoting_sender.h"
+#include "cast/standalone_sender/screen_mirror_sender.h"
 #include "cast/streaming/public/environment.h"
 #include "cast/streaming/public/sender_session.h"
 #include "platform/base/error.h"
@@ -188,6 +189,10 @@ class LoopingFileCastAgent final
   std::unique_ptr<Environment> environment_;
   std::unique_ptr<SenderSession> current_session_;
   std::unique_ptr<LoopingFileSender> file_sender_;
+
+  // Live screen-mirror sender, used instead of `file_sender_` when the
+  // configured path selects screen capture (e.g. "screen" or "screen:eDP-1").
+  std::unique_ptr<ScreenMirrorSender> screen_sender_;
 
   // Remoting specific member variables.
   std::unique_ptr<RemotingSender> remoting_sender_;
