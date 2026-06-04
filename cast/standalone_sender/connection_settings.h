@@ -53,6 +53,11 @@ struct ConnectionSettings {
   // For window mirroring: capture only the audio of this process (and its
   // descendants) instead of the whole system mix. 0 = system mix (default).
   int audio_target_pid = 0;
+
+  // For window mirroring: also match the app's audio node by application name /
+  // binary (case-insensitive). Catches apps (e.g. browsers) whose PipeWire node
+  // resolves to a launcher PID via pipewire.sec.pid rather than the window PID.
+  std::string audio_target_app;
 };
 
 }  // namespace openscreen::cast

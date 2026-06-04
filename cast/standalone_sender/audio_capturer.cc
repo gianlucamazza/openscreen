@@ -2,6 +2,8 @@
 
 #include "cast/standalone_sender/audio_capturer.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -97,6 +99,24 @@ void AudioCapturer::OnProcess(void* userdata) {
   pw_stream_queue_buffer(self->stream_, b);
 }
 
+static std::string ToLower(const char* s) {
+  std::string out(s ? s : "");
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return out;
+}
+
+// True if `app` (a lowercased application name/binary) matches `target` (also
+// lowercased): equal, or one is a prefix of the other (e.g. "librewolf" vs
+// "librewolf-bin"). Empty inputs never match.
+static bool AppMatches(const std::string& target, const std::string& app) {
+  if (target.empty() || app.empty()) {
+    return false;
+  }
+  return app == target || app.rfind(target, 0) == 0 ||
+         target.rfind(app, 0) == 0;
+}
+
 // True if `pid` is one of the target PIDs or a descendant of one (walk the
 // parent chain up to init). Bounded depth guards against cycles.
 static bool IsPidTargeted(const std::set<int>& targets, int pid) {
@@ -118,20 +138,28 @@ void AudioCapturer::OnRegistryGlobal(void* data, uint32_t id,
   if (!props || !type) {
     return;
   }
-  // Record Client objects' PIDs: app audio nodes often carry the PID only on
-  // their owning Client (looked up via client.id). At the registry/global level
-  // the reliable key is `pipewire.sec.pid` (the connecting process, set by the
-  // server); `application.process.id` lives only in the bound object's info.
+  // Record Client objects' PID + app identity: app audio nodes often carry
+  // these only on their owning Client (looked up via client.id). Prefer
+  // `application.process.id` (the actual app PID, e.g. the browser) over
+  // `pipewire.sec.pid` — the latter is the *connecting* process, which for apps
+  // launched via a wrapper/portal is a launcher unrelated to the window PID.
   if (std::string(type) == PW_TYPE_INTERFACE_Client) {
-    const char* p = spa_dict_lookup(props, PW_KEY_SEC_PID);
+    const char* p = spa_dict_lookup(props, PW_KEY_APP_PROCESS_ID);
     if (!p) {
-      p = spa_dict_lookup(props, PW_KEY_APP_PROCESS_ID);
+      p = spa_dict_lookup(props, PW_KEY_SEC_PID);
+    }
+    const char* app = spa_dict_lookup(props, PW_KEY_APP_PROCESS_BINARY);
+    if (!app) {
+      app = spa_dict_lookup(props, PW_KEY_APP_NAME);
     }
     if (p) {
       self->client_pids_[id] = std::atoi(p);
-      if (self->target_serial_ == 0) {
-        self->TryMatchPendingNodes();  // a pending node may resolve now
-      }
+    }
+    if (app) {
+      self->client_apps_[id] = ToLower(app);
+    }
+    if (self->target_serial_ == 0 && (p || app)) {
+      self->TryMatchPendingNodes();  // a pending node may resolve now
     }
     return;
   }
@@ -151,8 +179,16 @@ void AudioCapturer::OnRegistryGlobal(void* data, uint32_t id,
   cand.serial = static_cast<uint32_t>(std::strtoul(serial_str, nullptr, 10));
   if (const char* pid_str = spa_dict_lookup(props, PW_KEY_APP_PROCESS_ID)) {
     cand.own_pid = std::atoi(pid_str);
-  } else if (const char* cid = spa_dict_lookup(props, PW_KEY_CLIENT_ID)) {
+  }
+  // Always remember the owning client: even when the node carries its own PID,
+  // the app identity (for name matching) may live only on the Client object.
+  if (const char* cid = spa_dict_lookup(props, PW_KEY_CLIENT_ID)) {
     cand.client_id = static_cast<uint32_t>(std::strtoul(cid, nullptr, 10));
+  }
+  if (const char* app = spa_dict_lookup(props, PW_KEY_APP_PROCESS_BINARY)) {
+    cand.app = ToLower(app);
+  } else if (const char* an = spa_dict_lookup(props, PW_KEY_APP_NAME)) {
+    cand.app = ToLower(an);
   }
   self->candidate_nodes_[id] = cand;
   self->TryMatchPendingNodes();
@@ -164,17 +200,30 @@ void AudioCapturer::TryMatchPendingNodes() {
   }
   for (const auto& [node_id, cand] : candidate_nodes_) {
     int pid = cand.own_pid;
-    if (pid <= 0 && cand.client_id != 0) {
-      const auto it = client_pids_.find(cand.client_id);
-      if (it != client_pids_.end()) {
-        pid = it->second;
+    std::string app = cand.app;
+    if ((pid <= 0 || app.empty()) && cand.client_id != 0) {
+      if (pid <= 0) {
+        const auto it = client_pids_.find(cand.client_id);
+        if (it != client_pids_.end()) {
+          pid = it->second;
+        }
+      }
+      if (app.empty()) {
+        const auto it = client_apps_.find(cand.client_id);
+        if (it != client_apps_.end()) {
+          app = it->second;
+        }
       }
     }
-    if (pid > 0 && IsPidTargeted(target_pids_, pid)) {
+    const bool pid_hit = pid > 0 && IsPidTargeted(target_pids_, pid);
+    const bool name_hit = AppMatches(target_app_, app);
+    if (pid_hit || name_hit) {
       target_serial_ = cand.serial;
       target_node_id_ = node_id;
       OSP_LOG_INFO << "AudioCapturer: tapping app audio (pid " << pid
-                   << ", serial " << target_serial_ << ")";
+                   << ", app '" << app << "', match "
+                   << (pid_hit ? "pid" : "name") << ", serial "
+                   << target_serial_ << ")";
       ConnectStream();
       return;
     }
@@ -185,6 +234,7 @@ void AudioCapturer::OnRegistryGlobalRemove(void* data, uint32_t id) {
   auto* self = static_cast<AudioCapturer*>(data);
   self->candidate_nodes_.erase(id);
   self->client_pids_.erase(id);
+  self->client_apps_.erase(id);
   if (id == self->target_node_id_ && self->target_node_id_ != 0) {
     OSP_LOG_INFO << "AudioCapturer: tapped app node gone; awaiting next";
     self->DestroyStream();
@@ -203,8 +253,10 @@ bool AudioCapturer::Start(int channels, int sample_rate,
 
 bool AudioCapturer::StartForPids(int channels, int sample_rate,
                                  const std::set<int>& pids,
+                                 const std::string& app,
                                  FrameCallback on_audio) {
   target_pids_ = pids;
+  target_app_ = ToLower(app.c_str());
   return StartInternal(channels, sample_rate, std::move(on_audio));
 }
 
@@ -222,7 +274,7 @@ bool AudioCapturer::StartInternal(int channels, int sample_rate,
     return false;
   }
 
-  if (target_pids_.empty()) {
+  if (target_pids_.empty() && target_app_.empty()) {
     // System mix: connect the sink-monitor stream immediately.
     if (!ConnectStream()) {
       Stop();
@@ -259,7 +311,7 @@ bool AudioCapturer::StartInternal(int channels, int sample_rate,
     return false;
   }
   running_ = true;
-  if (target_pids_.empty()) {
+  if (target_pids_.empty() && target_app_.empty()) {
     OSP_LOG_INFO << "AudioCapturer: capturing default sink monitor @ "
                  << sample_rate << " Hz, " << channels << " ch";
   } else {
@@ -276,7 +328,7 @@ bool AudioCapturer::ConnectStream() {
                 sample_rate_);
 
   pw_properties* props = nullptr;
-  if (target_pids_.empty()) {
+  if (target_pids_.empty() && target_app_.empty()) {
     // STREAM_CAPTURE_SINK records the monitor of the default sink (everything).
     props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Capture",

@@ -124,17 +124,22 @@ ScreenMirrorSender::ScreenMirrorSender(
   // Audio. Window mirror with a target PID → capture only that app's audio;
   // otherwise the whole desktop (default sink monitor). Either way fall back to
   // a silent track (the receiver expects an audio stream) if capture can't run.
-  per_app_audio_ = settings_.audio_target_pid > 0;
+  per_app_audio_ =
+      settings_.audio_target_pid > 0 || !settings_.audio_target_app.empty();
   auto on_audio = [this](const float* s, int n, int ch) {
     OnCapturedAudio(s, n, ch);
   };
   if (per_app_audio_) {
-    const std::set<int> pids{settings_.audio_target_pid};
+    std::set<int> pids;
+    if (settings_.audio_target_pid > 0) {
+      pids.insert(settings_.audio_target_pid);
+    }
     real_audio_active_ = audio_capturer_.StartForPids(
         audio_encoder_.num_channels(), audio_encoder_.sample_rate(), pids,
-        on_audio);
+        settings_.audio_target_app, on_audio);
     OSP_LOG_INFO << "ScreenMirrorSender: per-app audio for pid "
-                 << settings_.audio_target_pid;
+                 << settings_.audio_target_pid << " app '"
+                 << settings_.audio_target_app << "'";
     // Per-app audio is intermittent (silent app, or stream not yet present), so
     // always run the gap-filler to keep the audio track continuous.
     audio_task_.Schedule([this] { FillAudioGap(); }, Alarm::kImmediately);

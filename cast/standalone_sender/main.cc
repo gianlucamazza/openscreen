@@ -75,6 +75,12 @@ options:
           instead of the default sink. Useful when mirroring a window so only
           that application's audio is streamed.
 
+    -N, --audio-app=NAME
+          Also match the app's audio node by application name / binary
+          (case-insensitive), in addition to --audio-pid. Needed for apps (e.g.
+          browsers) whose PipeWire node reports a launcher PID rather than the
+          window PID.
+
     -c, --codec: Specifies the video codec to be used. Can be one of:
                  vp8, vp9, av1, h264. Defaults to vp8 if not specified.
                  (h264 is hardware-encoded via VAAPI; used for mirroring.)
@@ -165,6 +171,7 @@ struct Arguments {
   bool enable_input_events = false;
   bool is_verbose = false;
   int audio_target_pid = 0;
+  std::string audio_target_app;
   VideoCodec codec = VideoCodec::kVp8;
   std::unique_ptr<TraceLoggingPlatform> trace_logger;
   bool enable_dscp = true;
@@ -182,6 +189,7 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
       {"enable-input-events", no_argument, nullptr, 'i'},
       {"help", no_argument, nullptr, 'h'},
       {"audio-pid", required_argument, nullptr, 'A'},
+      {"audio-app", required_argument, nullptr, 'N'},
       {"max-bitrate", required_argument, nullptr, 'm'},
       {"no-looping", no_argument, nullptr, 'n'},
       {"disable-dscp", no_argument, nullptr, 'q'},
@@ -195,7 +203,7 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
 
   Arguments args;
   int ch = -1;
-  while ((ch = getopt_long(argc, argv, "aA:c:d:him:nqrtvP", kArgumentOptions,
+  while ((ch = getopt_long(argc, argv, "aA:c:d:him:nN:qrtvP", kArgumentOptions,
                            nullptr)) != -1) {
     switch (ch) {
       case 'a':
@@ -207,6 +215,9 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
           OSP_LOG_ERROR << "Invalid --audio-pid: " << get_opt::optarg;
           return std::nullopt;
         }
+        break;
+      case 'N':
+        args.audio_target_app = get_opt::optarg;
         break;
       case 'm':
         if (!string_parse::ParseAsciiNumber(get_opt::optarg,
@@ -331,7 +342,8 @@ int StandaloneSenderMain(int argc, char* argv[]) {
                          .codec = args->codec,
                          .enable_dscp = args->enable_dscp,
                          .enable_input_events = args->enable_input_events,
-                         .audio_target_pid = args->audio_target_pid});
+                         .audio_target_pid = args->audio_target_pid,
+                         .audio_target_app = args->audio_target_app});
   });
 
   // Run the event loop until SIGINT (e.g., CTRL-C at the console) or

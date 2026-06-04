@@ -22,6 +22,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <string>
 
 struct pw_thread_loop;
 struct pw_stream;
@@ -56,8 +57,11 @@ class AudioCapturer {
   // non-invasive (the app keeps playing on its own sinks). If no matching node
   // exists yet, the capturer waits for one to appear (the consumer should fill
   // silence meanwhile). Returns false only if PipeWire itself is unavailable.
+  // `pids` taps the app by PID (and descendants); `app` additionally matches the
+  // node by application name / binary (case-insensitive), for apps whose node
+  // reports a launcher PID. Either may be empty; at least one should be set.
   bool StartForPids(int channels, int sample_rate, const std::set<int>& pids,
-                    FrameCallback on_audio);
+                    const std::string& app, FrameCallback on_audio);
   void Stop();
 
   // PipeWire trampolines (public so the file-scope event tables can name them);
@@ -87,8 +91,11 @@ class AudioCapturer {
   int sample_rate_ = 0;
   bool running_ = false;
 
-  // Per-app mode state (empty `target_pids_` => system-mix mode).
+  // Per-app mode state (empty `target_pids_` AND empty `target_app_` => system
+  // mix mode).
   std::set<int> target_pids_;
+  // Lowercased app identity (application name or binary) to match nodes by name.
+  std::string target_app_;
   pw_context* context_ = nullptr;
   pw_core* core_ = nullptr;
   pw_registry* registry_ = nullptr;
@@ -101,13 +108,18 @@ class AudioCapturer {
   // carry application.process.id themselves (e.g. mpv); the PID lives on their
   // Client object, looked up via the node's client.id.
   std::map<uint32_t, int> client_pids_;
+  // PipeWire Client registry id -> lowercased app identity (application name or
+  // binary), used for name-based matching when the PID doesn't line up.
+  std::map<uint32_t, std::string> client_apps_;
   // Candidate Stream/Output/Audio nodes not yet matched (registry id -> info).
   // `own_pid` is the node's own application.process.id (0 if absent → resolve
-  // via `client_id`).
+  // via `client_id`); `app` is its lowercased app identity (may be empty →
+  // resolve via the owning Client).
   struct NodeCandidate {
     uint32_t serial;
     uint32_t client_id;
     int own_pid;
+    std::string app;
   };
   std::map<uint32_t, NodeCandidate> candidate_nodes_;
 };
