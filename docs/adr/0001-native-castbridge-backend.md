@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -87,8 +87,8 @@ must be treated as responsible for:
 - subprocess lifecycle for `cast_sender`, `curl`, and Hyprland tools;
 - test coverage for IPC and controller behavior.
 
-The current implementation should remain `Proposed` until the product-readiness
-gaps above are resolved or explicitly accepted by the maintainer.
+These product-readiness gaps have since been resolved (see Follow-up), so this ADR
+is now `Accepted`.
 
 ## Validation
 
@@ -105,15 +105,25 @@ The audit established the following current evidence:
 
 ## Follow-up
 
-Before this ADR can move from `Proposed` to `Accepted`, the fork should:
+All pre-`Accepted` gaps are resolved (see "Done" below). The native backend is now
+treated as a product surface with stable IPC semantics, safe shutdown, and tests.
 
-- add controller-level tests for `castbridge` (media/youtube/mirror), building on
-  the IPC tests below.
+Remaining work is feature/product roadmap, tracked on the GitHub Project board, not
+blockers for this ADR:
+- AMO publishing of the extension;
+- screen mirror via xdg-desktop-portal + PipeWire (beyond Hyprland);
+- window mirror beyond Hyprland.
 
-This is now the only remaining item; the ADR can move to `Accepted` once it lands
-or is explicitly accepted as a known gap by the maintainer.
+Known testing boundary (accepted): the media/youtube Cast clients' live session
+behavior (TLS channel + receiver) — including the YouTube Lounge event-channel status
+poll — is covered by integration testing, not unit tests; the unit tests cover the
+controllers' no-session paths and the full mirror lifecycle.
 
 Done since this ADR was first drafted:
+
+- **[done] Controller-level tests.** `mirror_controller` is covered end-to-end via a
+  stubbed sender (`castbridge_unittests`); `media_controller`/`youtube_controller`
+  no-session paths are covered with a `FakeTaskRunner` (`castbridge_controller_unittests`).
 
 - **[done] `cast_sender --help` matches the CLI.** Added `h264` to `-c`, documented
   `-A, --audio-pid`, and documented the positional target forms
