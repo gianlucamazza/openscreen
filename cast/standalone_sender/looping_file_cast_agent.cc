@@ -4,6 +4,9 @@
 
 #include "cast/standalone_sender/looping_file_cast_agent.h"
 
+#include <unistd.h>
+
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <utility>
@@ -32,6 +35,24 @@ using DeviceMediaPolicy = SenderSocketFactory::DeviceMediaPolicy;
 bool IsMirrorPath(const std::string& path) {
   return path == "screen" || path.rfind("screen:", 0) == 0 ||
          path == "window" || path.rfind("window:", 0) == 0;
+}
+
+// Report a machine-readable start outcome to a parent that spawned us with a
+// status pipe (castbridge sets CASTBRIDGE_STATUS_FD). A no-op for standalone
+// CLI use. `token` is "streaming" (session negotiated) or "failed". This lets
+// the parent detect success without scraping the human-facing log.
+void ReportMirrorStatus(const char* token) {
+  const char* fd_str = std::getenv("CASTBRIDGE_STATUS_FD");
+  if (!fd_str || !*fd_str) {
+    return;
+  }
+  const int fd = std::atoi(fd_str);
+  if (fd <= 0) {
+    return;
+  }
+  const std::string line = std::string(token) + "\n";
+  ssize_t written = write(fd, line.data(), line.size());
+  (void)written;  // best-effort; parent may have already moved on
 }
 
 }  // namespace
@@ -352,6 +373,7 @@ void LoopingFileCastAgent::CreateAndStartSession() {
   }
   if (!negotiation_error.ok()) {
     OSP_LOG_ERROR << "Failed to negotiate a session: " << negotiation_error;
+    ReportMirrorStatus("failed");
   }
 }
 
@@ -361,6 +383,7 @@ void LoopingFileCastAgent::OnNegotiated(
     capture_recommendations::Recommendations capture_recommendations) {
   if (senders.audio_sender == nullptr || senders.video_sender == nullptr) {
     OSP_LOG_ERROR << "Missing both audio and video, so exiting...";
+    ReportMirrorStatus("failed");
     return;
   }
 
@@ -374,6 +397,7 @@ void LoopingFileCastAgent::OnNegotiated(
 void LoopingFileCastAgent::OnError(const SenderSession* session,
                                    const Error& error) {
   OSP_LOG_ERROR << "SenderSession fatal error: " << error;
+  ReportMirrorStatus("failed");  // no-op if we already reported "streaming"
   Shutdown();
 }
 
@@ -447,6 +471,7 @@ void LoopingFileCastAgent::StartFileSender() {
   }
   current_negotiation_.reset();
   is_ready_for_remoting_ = false;
+  ReportMirrorStatus("streaming");  // session negotiated; sender is now running
 }
 
 void LoopingFileCastAgent::Shutdown() {

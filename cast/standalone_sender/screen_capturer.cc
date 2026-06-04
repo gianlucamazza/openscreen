@@ -327,8 +327,22 @@ void ScreenCapturer::SelectToplevel() {
         return;
       }
     }
+    // An explicit address that we cannot map must NOT silently fall back to an
+    // arbitrary window. castbridge drives mirroring purely by address (it clears
+    // the selector), having already resolved and validated a specific window via
+    // window_resolver; capturing a different window would be a silent divergence.
+    // Fail loudly here (chosen_toplevel_ stays null -> Start() errors out) unless
+    // the caller also supplied a selector to fall back on.
+    if (selector_.empty()) {
+      OSP_LOG_WARN << "ScreenCapturer: no toplevel mapped to address "
+                   << target_address_
+                   << " and no selector given; refusing to pick an arbitrary "
+                      "window";
+      return;
+    }
     OSP_LOG_WARN << "ScreenCapturer: no toplevel mapped to address "
-                 << target_address_ << "; falling back to selector";
+                 << target_address_ << "; falling back to selector '"
+                 << selector_ << "'";
   }
   if (selector_.empty()) {
     chosen_toplevel_ = toplevels_.front().handle;
