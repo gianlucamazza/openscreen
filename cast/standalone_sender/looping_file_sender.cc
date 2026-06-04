@@ -4,7 +4,16 @@
 
 #include "cast/standalone_sender/looping_file_sender.h"
 
+#include <algorithm>
+#include <memory>
 #include <utility>
+#include <vector>
+
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+#include <libswscale/swscale.h>
+}
 
 #if defined(CAST_STANDALONE_SENDER_HAVE_LIBAOM)
 #include "cast/standalone_sender/streaming_av1_encoder.h"
@@ -28,10 +37,6 @@ LoopingFileSender::LoopingFileSender(Environment& environment,
       audio_encoder_(senders.audio_sender->config().channels,
                      StreamingOpusEncoder::kDefaultCastAudioFramesPerSecond,
                      std::move(senders.audio_sender)),
-      video_encoder_(CreateVideoEncoder(
-          StreamingVideoEncoder::Parameters{.codec = settings.codec},
-          env_.task_runner(),
-          std::move(senders.video_sender))),
       next_task_(env_.now_function(), env_.task_runner()),
       console_update_task_(env_.now_function(), env_.task_runner()) {
   // Opus and Vp8 are the default values for the config, and if these are set
@@ -40,7 +45,23 @@ LoopingFileSender::LoopingFileSender(Environment& environment,
   OSP_CHECK(senders.audio_config.codec == AudioCodec::kOpus);
   OSP_CHECK(senders.video_config.codec == VideoCodec::kVp8 ||
             senders.video_config.codec == VideoCodec::kVp9 ||
-            senders.video_config.codec == VideoCodec::kAv1);
+            senders.video_config.codec == VideoCodec::kAv1 ||
+            senders.video_config.codec == VideoCodec::kH264);
+
+  // H.264 is hardware-encoded via VAAPI (no StreamingVideoEncoder); VP8/VP9/AV1
+  // go through the software encoder factory. Mirrors ScreenMirrorSender. Branch
+  // on the negotiated codec (the field the OSP_CHECK above validates) so the
+  // encoder choice matches what the receiver actually answered.
+  use_h264_ = (senders.video_config.codec == VideoCodec::kH264);
+  if (use_h264_) {
+    h264_encoder_ = std::make_unique<H264VaapiEncoder>(
+        std::move(senders.video_sender), settings_.max_bitrate);
+  } else {
+    video_encoder_ = CreateVideoEncoder(
+        StreamingVideoEncoder::Parameters{.codec = settings_.codec},
+        env_.task_runner(), std::move(senders.video_sender));
+  }
+
   OSP_LOG_INFO << "Max allowed media bitrate (audio + video) will be "
                << settings_.max_bitrate;
   bandwidth_being_utilized_ = settings_.max_bitrate / 2;
@@ -49,7 +70,11 @@ LoopingFileSender::LoopingFileSender(Environment& environment,
   next_task_.Schedule([this] { SendFileAgain(); }, Alarm::kImmediately);
 }
 
-LoopingFileSender::~LoopingFileSender() = default;
+LoopingFileSender::~LoopingFileSender() {
+  if (sws_) {
+    sws_freeContext(sws_);
+  }
+}
 
 void LoopingFileSender::SetPlaybackRate(double rate) {
   video_capturer_->SetPlaybackRate(rate);
@@ -74,8 +99,13 @@ void LoopingFileSender::UpdateEncoderBitrates() {
   } else {
     audio_encoder_.UseStandardQuality();
   }
-  video_encoder_->SetTargetBitrate(bandwidth_being_utilized_ -
-                                   audio_encoder_.GetBitrate());
+  const int video_bitrate =
+      bandwidth_being_utilized_ - audio_encoder_.GetBitrate();
+  if (use_h264_) {
+    h264_encoder_->SetTargetBitrate(video_bitrate);
+  } else {
+    video_encoder_->SetTargetBitrate(video_bitrate);
+  }
 }
 
 void LoopingFileSender::ControlForNetworkCongestion() {
@@ -151,6 +181,15 @@ void LoopingFileSender::OnVideoFrame(const AVFrame& av_frame,
   TRACE_SCOPED1(TraceCategory::kStandaloneSender, "OnVideoFrame",
                 "reference_time", ToString(reference_time));
   latest_frame_time_ = std::max(reference_time, latest_frame_time_);
+
+  if (use_h264_) {
+    // No DrawAnimations here: the click overlay is a mirroring-only feature
+    // (active_clicks_ is fed by OnInputMessage, never during file casting), and
+    // its 8-bit luma/chroma writes would corrupt a 10-bit (yuv420p10le) frame.
+    EncodeVideoFrameH264(av_frame, reference_time);
+    return;
+  }
+
   StreamingVideoEncoder::VideoFrame frame{};
   frame.width = av_frame.width - av_frame.crop_left - av_frame.crop_right;
   frame.height = av_frame.height - av_frame.crop_top - av_frame.crop_bottom;
@@ -172,6 +211,88 @@ void LoopingFileSender::OnVideoFrame(const AVFrame& av_frame,
   // TODO(jophba): Add performance metrics visual overlay (based on Stats
   // callback).
   video_encoder_->EncodeAndSend(frame, reference_time, {});
+}
+
+// Known limitations (shared with the screen path, by design):
+//  - The output box is hardcoded to 1920x1080: the negotiated resolution is not
+//    read back from the receiver's ANSWER (same simplification as
+//    ScreenMirrorSender), so a receiver that answered a smaller box would still
+//    get 1080p. The configured TV negotiates 1080p, so this holds today.
+//  - H264VaapiEncoder uses constant-QP (qp=20), so SetTargetBitrate() does not
+//    hard-cap the output: bitrate is variable and a high-motion film scene may
+//    exceed the network budget. Acceptable for LAN casting; a qp/VBR knob would
+//    live in the shared encoder, not here.
+void LoopingFileSender::EncodeVideoFrameH264(
+    const AVFrame& av_frame,
+    Clock::time_point reference_time) {
+  const int src_w =
+      (av_frame.width - av_frame.crop_left - av_frame.crop_right) & ~1;
+  const int src_h =
+      (av_frame.height - av_frame.crop_top - av_frame.crop_bottom) & ~1;
+  if (src_w <= 0 || src_h <= 0) {
+    return;
+  }
+
+  // Scale down to fit the negotiated 1080p box (the receiver rejects larger
+  // frames); never upscale. H.264 is hardware-encoded so 1080p is affordable.
+  constexpr int kMaxW = 1920;
+  constexpr int kMaxH = 1080;
+  const double scale = std::min({1.0, static_cast<double>(kMaxW) / src_w,
+                                 static_cast<double>(kMaxH) / src_h});
+  const int dst_w = std::max(2, static_cast<int>(src_w * scale) & ~1);
+  const int dst_h = std::max(2, static_cast<int>(src_h * scale) & ~1);
+
+  // Use the decoded frame's actual pixel format (e.g. yuv420p10le for 10-bit
+  // HEVC) — hardcoding 8-bit YUV420P misreads 10-bit samples and distorts the
+  // image. swscale converts any of these to NV12 for the encoder.
+  const int src_fmt = av_frame.format;
+  if (!sws_ || sws_src_w_ != src_w || sws_src_h_ != src_h ||
+      sws_src_fmt_ != src_fmt) {
+    if (sws_) {
+      sws_freeContext(sws_);
+    }
+    sws_ = sws_getContext(src_w, src_h, static_cast<AVPixelFormat>(src_fmt),
+                          dst_w, dst_h, AV_PIX_FMT_NV12, SWS_LANCZOS, nullptr,
+                          nullptr, nullptr);
+    sws_src_w_ = src_w;
+    sws_src_h_ = src_h;
+    sws_src_fmt_ = src_fmt;
+  }
+  if (!sws_) {
+    return;
+  }
+
+  // swscale writes in SIMD chunks past each line, so align strides to 32 and
+  // add slack to avoid heap overruns. NV12: Y plane then interleaved UV.
+  auto align32 = [](int v) { return (v + 31) & ~31; };
+  const int y_stride = align32(dst_w);
+  const int uv_stride = align32(dst_w);
+  const size_t y_size = static_cast<size_t>(y_stride) * dst_h;
+  const size_t uv_size = static_cast<size_t>(uv_stride) * (dst_h / 2);
+  // Reusable scratch buffer: the encode below is synchronous on this thread, so
+  // (unlike the screen path, which posts to another thread) we need no per-frame
+  // allocation. resize() only reallocates when the frame size changes.
+  nv12_buf_.resize(y_size + uv_size + 64);
+  std::vector<uint8_t>& nv12 = nv12_buf_;
+
+  const uint8_t* src[3] = {
+      av_frame.data[0] + av_frame.crop_left +
+          av_frame.linesize[0] * av_frame.crop_top,
+      av_frame.data[1] + av_frame.crop_left / 2 +
+          av_frame.linesize[1] * av_frame.crop_top / 2,
+      av_frame.data[2] + av_frame.crop_left / 2 +
+          av_frame.linesize[2] * av_frame.crop_top / 2};
+  int src_stride[3] = {av_frame.linesize[0], av_frame.linesize[1],
+                       av_frame.linesize[2]};
+  uint8_t* dst[2] = {nv12.data(), nv12.data() + y_size};
+  int dst_stride[2] = {y_stride, uv_stride};
+  sws_scale(sws_, src, src_stride, 0, src_h, dst, dst_stride);
+
+  // OnVideoFrame already runs on the main TaskRunner (the encoder/Sender
+  // thread), so encode synchronously — no PostTask needed (unlike the screen
+  // path, whose capturer runs on another thread).
+  h264_encoder_->EncodeFrame(nv12.data(), y_stride, nv12.data() + y_size,
+                             uv_stride, dst_w, dst_h, reference_time);
 }
 
 void LoopingFileSender::UpdateStatusOnConsole() {
@@ -299,6 +420,9 @@ std::unique_ptr<StreamingVideoEncoder> LoopingFileSender::CreateVideoEncoder(
     TaskRunner& task_runner,
     std::unique_ptr<Sender> sender) {
   switch (params.codec) {
+    case VideoCodec::kH264:
+      // H.264 is handled by H264VaapiEncoder in the constructor, not here.
+      return nullptr;
     case VideoCodec::kVp8:
     case VideoCodec::kVp9:
       return std::make_unique<StreamingVpxEncoder>(params, task_runner,

@@ -13,10 +13,13 @@
 
 #include "cast/standalone_sender/connection_settings.h"
 #include "cast/standalone_sender/constants.h"
+#include "cast/standalone_sender/h264_vaapi_encoder.h"
 #include "cast/standalone_sender/simulated_capturer.h"
 #include "cast/standalone_sender/streaming_opus_encoder.h"
 #include "cast/standalone_sender/streaming_video_encoder.h"
 #include "cast/streaming/public/sender_session.h"
+
+struct SwsContext;
 
 namespace openscreen::cast {
 
@@ -75,6 +78,11 @@ class LoopingFileSender final : public SimulatedAudioCapturer::Client,
       TaskRunner& task_runner,
       std::unique_ptr<Sender> sender);
 
+  // H.264 path: convert the decoded I420 frame to NV12 (downscaling to fit the
+  // negotiated 1080p box) and hand it to the VAAPI hardware encoder.
+  void EncodeVideoFrameH264(const AVFrame& av_frame,
+                            Clock::time_point reference_time);
+
   // Holds the required injected dependencies (clock, task runner) used for Cast
   // Streaming, and owns the UDP socket over which all communications occur with
   // the remote's Receivers.
@@ -94,6 +102,19 @@ class LoopingFileSender final : public SimulatedAudioCapturer::Client,
 
   StreamingOpusEncoder audio_encoder_;
   std::unique_ptr<StreamingVideoEncoder> video_encoder_;
+
+  // VAAPI H.264 hardware encode path (selected when the negotiated video codec
+  // is H.264; the iGPU has no VP8/VP9 hardware encode). `use_h264_` chooses it
+  // over `video_encoder_`; `sws_` converts the decoded I420 frame to NV12.
+  std::unique_ptr<H264VaapiEncoder> h264_encoder_;
+  bool use_h264_ = false;
+  SwsContext* sws_ = nullptr;
+  int sws_src_w_ = 0;
+  int sws_src_h_ = 0;
+  int sws_src_fmt_ = -1;
+  // Reusable NV12 scratch buffer for the H.264 path (synchronous encode, so no
+  // per-frame allocation needed). Grown on demand in EncodeVideoFrameH264.
+  std::vector<uint8_t> nv12_buf_;
 
   int num_capturers_running_ = 0;
   Clock::time_point capture_begin_time_{};
