@@ -390,7 +390,8 @@ TEST_F(SocketHandleWaiterPosixInstanceTest,
   EXPECT_TRUE(result.ok()) << "ProcessHandles returned: " << result;
 
   std::array<uint8_t, 16> drain;
-  read(pipe_fds[0], drain.data(), drain.size());
+  ssize_t drained = read(pipe_fds[0], drain.data(), drain.size());
+  (void)drained;
   waiter_.Unsubscribe(&subscriber_, std::cref(read_end_handle));
   ClosePipe(pipe_fds);
 }

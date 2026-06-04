@@ -87,6 +87,7 @@ openscreen_source_set("dnssd") {
     "../cast/common:discovery_e2e_test",
     "../cast/standalone_receiver:*",
     "../cast/standalone_sender:*",
+    "../cast/castbridge:*",
     "../osp/impl",
   ]
   public = []
