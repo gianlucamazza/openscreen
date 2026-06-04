@@ -107,12 +107,6 @@ The audit established the following current evidence:
 
 Before this ADR can move from `Proposed` to `Accepted`, the fork should:
 
-- harden the daemon shutdown lifecycle. (Note: a follow-up audit found the signal
-  handler itself is async-signal-safe — it only sets an atomic and writes the
-  wake eventfd. The real, narrow issue is a use-after-free if a signal arrives
-  during teardown after the stack-scoped `IpcServer`/daemon objects are gone;
-  fix by clearing the global pointer after `Run()` and snapshotting it in the
-  handler.);
 - remove or justify `testonly` for native product binaries;
 - update `cast_sender --help` to match the fork's actual CLI (it omits H.264 in
   `-c`, the `--audio-pid` option, and the `screen`/`window` mirror targets);
@@ -121,6 +115,10 @@ Before this ADR can move from `Proposed` to `Accepted`, the fork should:
 
 Done since this ADR was first drafted:
 
+- **[done] Hardened the daemon shutdown lifecycle.** The signal handler was
+  already async-signal-safe; the real issue — a use-after-free if a signal hit
+  during teardown — is fixed by making the global `IpcServer*` atomic and
+  clearing it right after `Run()` returns so the handler no-ops during shutdown.
 - **[done] Fixed IPC request drop / response loss for one-shot clients.** The
   poll loop closed a connection on POLLHUP/EOF before dispatching the buffered
   request; half-closed clients also lost late (async) responses. It now dispatches
