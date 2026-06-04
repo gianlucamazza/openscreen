@@ -107,13 +107,23 @@ The audit established the following current evidence:
 
 Before this ADR can move from `Proposed` to `Accepted`, the fork should:
 
-- remove or justify `testonly` for native product binaries;
-- update `cast_sender --help` to match the fork's actual CLI (it omits H.264 in
-  `-c`, the `--audio-pid` option, and the `screen`/`window` mirror targets);
 - add controller-level tests for `castbridge` (media/youtube/mirror), building on
   the IPC tests below.
 
+This is now the only remaining item; the ADR can move to `Accepted` once it lands
+or is explicitly accepted as a known gap by the maintainer.
+
 Done since this ADR was first drafted:
+
+- **[done] `cast_sender --help` matches the CLI.** Added `h264` to `-c`, documented
+  `-A, --audio-pid`, and documented the positional target forms
+  (`screen[:output]`, `window[:<app-id|title>]`, `window:addr=<hex>`).
+- **[kept, justified] `testonly` on the native binaries.** Not removed: it follows
+  the repo convention for standalone executables (`cast_sender`, `cast_receiver`,
+  `osp_demo` are all `testonly`) — they are standalone-build tools, not shipped
+  library/production artifacts. `castbridge`/`cast_sender` are leaves of the
+  `testonly` `gn_all` and nothing links them as a library, so `testonly` is the
+  correct classification.
 
 - **[done] Hardened the daemon shutdown lifecycle.** The signal handler was
   already async-signal-safe; the real issue — a use-after-free if a signal hit
