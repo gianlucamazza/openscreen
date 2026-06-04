@@ -100,22 +100,34 @@ The audit established the following current evidence:
   `192.168.1.228`.
 - JSON IPC responses work when the client keeps the AF_UNIX connection open.
 - Some one-shot IPC clients receive zero bytes if they close immediately after
-  writing a request.
+  writing a request. (Fixed since — see Follow-up.)
 - `openscreen_unittests` were not completed during the audit.
 
 ## Follow-up
 
 Before this ADR can move from `Proposed` to `Accepted`, the fork should:
 
-- fix the IPC close/drain behavior for one-shot clients;
-- replace signal-handler object calls and detached stop threads with a safer
-  shutdown model;
+- harden the daemon shutdown lifecycle. (Note: a follow-up audit found the signal
+  handler itself is async-signal-safe — it only sets an atomic and writes the
+  wake eventfd. The real, narrow issue is a use-after-free if a signal arrives
+  during teardown after the stack-scoped `IpcServer`/daemon objects are gone;
+  fix by clearing the global pointer after `Run()` and snapshotting it in the
+  handler.);
 - remove or justify `testonly` for native product binaries;
-- update `cast_sender --help` to match the fork's actual CLI;
-- add focused tests or harnesses for `castbridge` IPC and controller behavior.
+- update `cast_sender --help` to match the fork's actual CLI (it omits H.264 in
+  `-c`, the `--audio-pid` option, and the `screen`/`window` mirror targets);
+- add controller-level tests for `castbridge` (media/youtube/mirror), building on
+  the IPC tests below.
 
 Done since this ADR was first drafted:
 
+- **[done] Fixed IPC request drop / response loss for one-shot clients.** The
+  poll loop closed a connection on POLLHUP/EOF before dispatching the buffered
+  request; half-closed clients also lost late (async) responses. It now dispatches
+  buffered requests before teardown and keeps a half-closed connection open to
+  deliver the reply. Covered by `castbridge_unittests` (`ipc_server_unittest.cc`):
+  round-trip, half-close async response, dispatch-on-immediate-close, pipelining,
+  fragmented frames.
 - **[done] Reduced Cast-client duplication** by extracting `CastChannelClient`
   (`cast/castbridge/cast_channel_client.{h,cc}`); `media_receiver_client` and
   `youtube_cast_client` now derive from it.
