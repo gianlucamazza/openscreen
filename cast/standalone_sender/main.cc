@@ -42,11 +42,11 @@ namespace {
 
 void LogUsage(const char* argv0) {
   static constexpr char kTemplate[] = R"(
-usage: {} <options> network_interface media_file
+usage: {} <options> network_interface target
 
 or
 
-usage: {} <options> addr[:port] media_file
+usage: {} <options> addr[:port] target
 
    The first form runs this application in discovery+interactive mode. It will
    scan for Cast Receivers on the LAN reachable from the given network
@@ -57,13 +57,27 @@ usage: {} <options> addr[:port] media_file
    discover Cast Receivers, and instead connect directly to the Cast Receiver at
    addr:[port] (e.g., 192.168.1.22, 192.168.1.22:%d or [::1]:%d).
 
+   target is one of:
+     a media file path                  stream a file (the default mode);
+     screen                             mirror the first monitor (output);
+     screen:<output>                    mirror a specific output (e.g. eDP-1);
+     window                             mirror the active window;
+     window:<app-id|title>              mirror a window matched by app-id/title;
+     window:addr=<hex>                  mirror a window by Hyprland address.
+
 options:
     -a, --android-hack:
           Use the wrong RTP payload types, for compatibility with older Android
           TV receivers. See https://crbug.com/631828.
 
+    -A, --audio-pid=PID
+          Capture audio from the PipeWire output of the process with this PID
+          instead of the default sink. Useful when mirroring a window so only
+          that application's audio is streamed.
+
     -c, --codec: Specifies the video codec to be used. Can be one of:
-                 vp8, vp9, av1. Defaults to vp8 if not specified.
+                 vp8, vp9, av1, h264. Defaults to vp8 if not specified.
+                 (h264 is hardware-encoded via VAAPI; used for mirroring.)
 
     -d, --developer-certificate=path-to-cert
           Specifies the path to a self-signed developer certificate that will
