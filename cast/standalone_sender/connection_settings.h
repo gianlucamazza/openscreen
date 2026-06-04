@@ -38,6 +38,12 @@ struct ConnectionSettings {
   // mirroring.
   bool use_remoting = false;
 
+  // Diagnostic mode: after the mirroring app session is established, send a
+  // GET_CAPABILITIES request, log the receiver's RemotingCapabilities, and exit
+  // without negotiating a stream. Used to probe what a given receiver advertises
+  // for remoting (codecs, 4k) before building the remoting content path.
+  bool probe_caps = false;
+
   // Whether we should loop the video when it is completed.
   bool should_loop_video = true;
 

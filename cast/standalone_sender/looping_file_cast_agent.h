@@ -139,6 +139,8 @@ class LoopingFileCastAgent final
                     SenderSession::ConfiguredSenders senders,
                     capture_recommendations::Recommendations
                         capture_recommendations) override;
+  void OnCapabilitiesDetermined(const SenderSession* session,
+                                RemotingCapabilities capabilities) override;
   void OnError(const SenderSession* session, const Error& error) override;
 
   // Input message handler.

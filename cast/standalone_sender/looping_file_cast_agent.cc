@@ -19,6 +19,7 @@
 #include "cast/streaming/public/capture_recommendations.h"
 #include "cast/streaming/public/constants.h"
 #include "cast/streaming/public/offer_messages.h"
+#include "cast/streaming/remoting_capabilities.h"
 #include "json/value.h"
 #include "platform/api/tls_connection_factory.h"
 #include "util/json/json_helpers.h"
@@ -333,6 +334,20 @@ void LoopingFileCastAgent::CreateAndStartSession() {
   }
   OSP_CHECK(!message_port_.source_id().empty());
 
+  // Capability-probe mode: ask the receiver what it supports for remoting and
+  // exit (no stream negotiated). OnCapabilitiesDetermined() logs the result; if
+  // the receiver does not support remoting, OnError(kRemotingNotSupported) fires.
+  if (connection_settings_->probe_caps) {
+    OSP_LOG_INFO << "Probing receiver remoting capabilities "
+                    "(GET_CAPABILITIES)...";
+    const Error error = current_session_->RequestCapabilities();
+    if (!error.ok()) {
+      OSP_LOG_ERROR << "Failed to request capabilities: " << error;
+      Shutdown();
+    }
+    return;
+  }
+
   AudioCaptureConfig audio_config;
   // Opus does best at 192kbps, so we cap that here.
   audio_config.bit_rate = 192 * 1000;
@@ -392,6 +407,54 @@ void LoopingFileCastAgent::OnNegotiated(
   if (cast_mode_ == CastMode::kMirroring || is_ready_for_remoting_) {
     StartFileSender();
   }
+}
+
+void LoopingFileCastAgent::OnCapabilitiesDetermined(
+    const SenderSession* session,
+    RemotingCapabilities capabilities) {
+  auto audio_name = [](AudioCapability c) -> const char* {
+    switch (c) {
+      case AudioCapability::kBaselineSet:
+        return "baseline-set";
+      case AudioCapability::kAac:
+        return "aac";
+      case AudioCapability::kOpus:
+        return "opus";
+    }
+    return "unknown";
+  };
+  auto video_name = [](VideoCapability c) -> const char* {
+    switch (c) {
+      case VideoCapability::kSupports4k:
+        return "4k";
+      case VideoCapability::kH264:
+        return "h264";
+      case VideoCapability::kVp8:
+        return "vp8";
+      case VideoCapability::kVp9:
+        return "vp9";
+      case VideoCapability::kHevc:
+        return "hevc";
+      case VideoCapability::kAv1:
+        return "av1";
+    }
+    return "unknown";
+  };
+
+  std::string audio;
+  for (const AudioCapability c : capabilities.audio) {
+    audio += audio_name(c);
+    audio += ' ';
+  }
+  std::string video;
+  for (const VideoCapability c : capabilities.video) {
+    video += video_name(c);
+    video += ' ';
+  }
+  OSP_LOG_INFO << "Receiver remoting capabilities: audio=[ " << audio
+               << "] video=[ " << video << "]";
+  // Probe complete; tear down and exit.
+  Shutdown();
 }
 
 void LoopingFileCastAgent::OnError(const SenderSession* session,

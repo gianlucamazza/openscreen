@@ -106,6 +106,10 @@ options:
 
     -r, --remoting: Enable remoting content instead of mirroring.
 
+    -C, --probe-caps: Connect, ask the receiver for its remoting capabilities
+                      (GET_CAPABILITIES), log them, and exit without streaming.
+                      A file path argument is still required (unused).
+
     -t, --tracing: Enable text based performance trace logging.
 
     -v, --verbose: Enable verbose logging.
@@ -168,6 +172,7 @@ struct Arguments {
   std::string developer_certificate_path;
   bool use_android_rtp_hack = false;
   bool use_remoting = false;
+  bool probe_caps = false;
   bool enable_input_events = false;
   bool is_verbose = false;
   int audio_target_pid = 0;
@@ -194,6 +199,7 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
       {"no-looping", no_argument, nullptr, 'n'},
       {"disable-dscp", no_argument, nullptr, 'q'},
       {"remoting", no_argument, nullptr, 'r'},
+      {"probe-caps", no_argument, nullptr, 'C'},
       {"tracing", no_argument, nullptr, 't'},
 #if defined(USE_PERFETTO)
       {"perfetto", no_argument, nullptr, 'P'},
@@ -203,7 +209,7 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
 
   Arguments args;
   int ch = -1;
-  while ((ch = getopt_long(argc, argv, "aA:c:d:him:nN:qrtvP", kArgumentOptions,
+  while ((ch = getopt_long(argc, argv, "aA:Cc:d:him:nN:qrtvP", kArgumentOptions,
                            nullptr)) != -1) {
     switch (ch) {
       case 'a':
@@ -243,6 +249,9 @@ std::optional<Arguments> ParseArgs(int argc, char* argv[]) {
         break;
       case 'r':
         args.use_remoting = true;
+        break;
+      case 'C':
+        args.probe_caps = true;
         break;
       case 't':
         args.trace_logger = std::make_unique<TextTraceLoggingPlatform>();
@@ -338,6 +347,7 @@ int StandaloneSenderMain(int argc, char* argv[]) {
                          .should_include_video = true,
                          .use_android_rtp_hack = args->use_android_rtp_hack,
                          .use_remoting = args->use_remoting,
+                         .probe_caps = args->probe_caps,
                          .should_loop_video = args->should_loop_video,
                          .codec = args->codec,
                          .enable_dscp = args->enable_dscp,
