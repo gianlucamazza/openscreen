@@ -1,3 +1,7 @@
+This repository is a fork of [chromium/openscreen](https://github.com/chromium/openscreen), the Open Screen Library maintained by the Chromium Authors.
+This fork adds a Wayland desktop/window Cast Streaming sender, VAAPI H.264 in the file-cast path, and related standalone_sender / castbridge wiring.
+It is not an official Chromium or Open Screen release.
+
 # Open Screen Library
 
 The Open Screen Library implements the Open Screen Protocol, Multicast DNS and
