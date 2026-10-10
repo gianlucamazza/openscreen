@@ -96,8 +96,7 @@ The audit established the following current evidence:
 
 - `autoninja -C out/Default cast_sender castbridge` completed successfully.
 - `castbridge --daemon` started discovery on the active wireless interface.
-- The daemon discovered a Cast receiver named `43PUS9235/12` at
-  `192.168.1.228`.
+- The daemon discovered the reference Cast receiver at `<tv-ip>`.
 - JSON IPC responses work when the client keeps the AF_UNIX connection open.
 - Some one-shot IPC clients receive zero bytes if they close immediately after
   writing a request. (Fixed since — see Follow-up.)
